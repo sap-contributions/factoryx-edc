@@ -597,6 +597,7 @@ vault:
       enabled: true
       devRootToken: "root"
     postStart:    # must be set externally!
+
   hashicorp:
     url: "http://{{ .Release.Name }}-vault:8200"
     token: "root"
@@ -607,6 +608,36 @@ vault:
     paths:
       secret: /v1/secret
       health: /v1/sys/health
+
+# -- Configuration for Vault Seed Job
+vaultseed:
+  # -- Docker image Configuration for Vault Seed Job
+  image:
+    repository: "hashicorp/vault"
+    pullPolicy: IfNotPresent
+    # -- image tag should match the vault version in Chart dependencies
+    tag: "1.15.2"
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 90
+  completions: 1
+  parallelism: 1
+  # -- Secrets to be seeded into vault (not recommended, only for testing purposes)
+  secrets: []
+#    - key: "key1"
+#      # Provide a path of a file relative to charts directory
+#      valueFrom: files/dataplane_private_key.pem
+#    - key: key2
+#      value: value2
+  env: {}
+#    key1: value1
+#    key2: value2
+  # -- Key pair init container configuration
+  key:
+    # -- Docker image configuration for key pair container
+    image:
+      repository: "alpine/openssl"
+      pullPolicy: IfNotPresent
+      tag: "3.5.0"
 
 networkPolicy:
   # -- If `true` network policy will be created to restrict access to control- and dataplane
