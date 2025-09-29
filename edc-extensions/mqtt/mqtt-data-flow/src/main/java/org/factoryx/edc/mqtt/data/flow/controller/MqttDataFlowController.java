@@ -31,6 +31,7 @@ import org.eclipse.edc.connector.dataplane.selector.spi.instance.DataPlaneInstan
 import org.eclipse.edc.policy.model.Policy;
 import org.eclipse.edc.spi.response.StatusResult;
 import org.eclipse.edc.spi.result.Result;
+import org.eclipse.edc.spi.types.domain.DataAddress;
 import org.eclipse.edc.spi.types.domain.transfer.DataFlowProvisionMessage;
 import org.eclipse.edc.spi.types.domain.transfer.DataFlowResponseMessage;
 import org.eclipse.edc.spi.types.domain.transfer.DataFlowStartMessage;
@@ -38,6 +39,7 @@ import org.eclipse.edc.spi.types.domain.transfer.TransferType;
 import org.eclipse.edc.validator.spi.DataAddressValidatorRegistry;
 import org.eclipse.edc.web.spi.configuration.context.ControlApiUrl;
 import org.factoryx.edc.mqtt.data.address.spi.MqttDataAddress;
+import org.factoryx.edc.mqtt.data.address.spi.MqttDataAddressSchema;
 import org.factoryx.edc.mqtt.data.params.spi.MqttParamsProvider;
 import org.jetbrains.annotations.NotNull;
 
@@ -46,11 +48,33 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 
+import static org.eclipse.edc.connector.controlplane.transfer.spi.types.TransferProcess.Type.CONSUMER;
+import static org.eclipse.edc.dataaddress.httpdata.spi.HttpDataAddressSchema.HTTP_DATA_TYPE;
 import static org.eclipse.edc.spi.response.ResponseStatus.FATAL_ERROR;
+import static org.eclipse.edc.spi.types.domain.transfer.FlowType.PULL;
+import static org.factoryx.edc.mqtt.data.address.spi.MqttDataAddressSchema.HTTP_DATA_PULL;
 import static org.factoryx.edc.mqtt.data.address.spi.MqttDataAddressSchema.MQTT_DATA_ADDRESS_TYPE;
 import static org.factoryx.edc.mqtt.data.address.spi.MqttDataAddressSchema.MQTT_DATA_PULL;
 
+/**
+ * A {@link DataFlowController} implementation to handle data of type: {@value MqttDataAddressSchema#MQTT_DATA_ADDRESS_TYPE}
+ * Few points to note:
+ * <ul>
+ *   <li>This controller gets executed at both consumer / provider control-plane.</li>
+ * <li>In case of consumer, source asset data address  {@link TransferProcess#getContentDataAddress()} is null,
+ *   since only provider has access to it.</li>
+ * <li>When a data flow is started via sending a {@link DataFlowStartMessage} to data-plane,
+ *   it always contains transferType: {@code HttpData-PULL} and a destination of type {@code HttpProxy},
+ *   because There is no data plane instance which can handle {@value MqttDataAddressSchema#MQTT_DATA_ADDRESS_TYPE} Data type.</li>
+ * <li>In case of EDR, we don't actually directly initiate a transfer,
+ *   but it gets automatically initiated when a contract negotiation is finalized via {@code org.eclipse.tractusx.edc.callback.ContractNegotiationCallback}
+ *   and it also hard-codes the transferType as {@code HttpData-PULL} and data destination of type {@code HttpProxy}.</li>
+ * </ul>
+ *
+ */
 public class MqttDataFlowController implements DataFlowController {
+
+    private static final DataAddress HTTP_DATA_ADDRESS = DataAddress.Builder.newInstance().type(HTTP_DATA_TYPE).build();
 
     private final ControlApiUrl callbackUrl;
     private final DataPlaneSelectorService selectorClient;
@@ -76,10 +100,15 @@ public class MqttDataFlowController implements DataFlowController {
 
     @Override
     public boolean canHandle(TransferProcess transferProcess) {
+
         Result<TransferType> transferType = transferTypeParser.parse(transferProcess.getTransferType());
-        return transferType.succeeded() &&
-                MQTT_DATA_ADDRESS_TYPE.equals(transferType.getContent().destinationType()) &&
-                MQTT_DATA_ADDRESS_TYPE.equals(transferProcess.getContentDataAddress().getType());
+        if  (transferProcess.getType() == CONSUMER) {
+            // transferProcess#getContentDataAddress() is null for consumer
+            return transferType.succeeded();
+        } else {
+            return transferType.succeeded() &&
+                    MQTT_DATA_ADDRESS_TYPE.equals(transferProcess.getContentDataAddress().getType());
+        }
     }
 
     @Override
@@ -167,12 +196,12 @@ public class MqttDataFlowController implements DataFlowController {
                 .participantId(policy.getAssignee())
                 .agreementId(transferProcess.getContractId())
                 .assetId(transferProcess.getAssetId())
-                .transferType(transferTypeParse.getContent())
+                .transferType(new TransferType(HTTP_DATA_TYPE, PULL))
                 .callbackAddress(callbackUrl != null ? callbackUrl.get() : null)
                 .properties(properties)
                 .build();
 
-        var selection = selectorClient.select(selectionStrategy, dataPlane -> dataPlane.canHandle(transferProcess.getContentDataAddress(), transferProcess.getTransferType()));
+        var selection = selectorClient.select(selectionStrategy, dataPlane -> dataPlane.canHandle(HTTP_DATA_ADDRESS, HTTP_DATA_PULL));
         if (!selection.succeeded()) {
             return StatusResult.failure(FATAL_ERROR, selection.getFailureDetail());
         }
@@ -198,7 +227,7 @@ public class MqttDataFlowController implements DataFlowController {
     @Override
     public Set<String> transferTypesFor(Asset asset) {
         if (MQTT_DATA_ADDRESS_TYPE.equals(asset.getDataAddress().getType())) {
-            return Set.of(MQTT_DATA_PULL);
+            return Set.of(MQTT_DATA_PULL, HTTP_DATA_PULL);
         }
         return Set.of();
     }
